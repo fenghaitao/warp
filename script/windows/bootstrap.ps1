@@ -49,6 +49,27 @@ winget install jqlang.jq
 # CMake is needed to build some dependencies, e.g.: sentry-contrib-native.
 winget install -e --id Kitware.CMake
 
+# protoc (Protocol Buffers compiler) is required by prost-build.
+# winget's protobuf package may be outdated; download the pinned version directly
+# from the GitHub releases to match what Linux uses (>= 3.15 for proto3 optional).
+$protocVersion = '25.1'
+$protocZip = "protoc-${protocVersion}-win64.zip"
+$protocUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v${protocVersion}/${protocZip}"
+$protocInstallDir = "$env:LOCALAPPDATA\protoc"
+if (-not (Get-Command -Name protoc -Type Application -ErrorAction SilentlyContinue)) {
+    Write-Output "Installing protoc ${protocVersion}..."
+    Invoke-WebRequest -Uri $protocUrl -OutFile "$env:Temp\$protocZip"
+    Expand-Archive -Path "$env:Temp\$protocZip" -DestinationPath $protocInstallDir -Force
+    Remove-Item "$env:Temp\$protocZip"
+    # Persist the bin directory in the user PATH so future sessions find protoc.
+    $userPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+    if ($userPath -notlike "*$protocInstallDir\bin*") {
+        [System.Environment]::SetEnvironmentVariable('PATH', "$userPath;$protocInstallDir\bin", 'User')
+    }
+    $env:PATH += ";$protocInstallDir\bin"
+    Write-Output "protoc installed to $protocInstallDir\bin"
+}
+
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup
 
