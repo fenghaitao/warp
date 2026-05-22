@@ -8,11 +8,13 @@ use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
     AgentInputFooter, AgentInputFooterEvent,
 };
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
-use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionScrollbackType};
+use crate::terminal::shared_session::{
+    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+};
 use crate::util::image::{infer_mime_type, MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES};
 use base64::Engine;
-use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::clipboard::{ClipboardContent, ImageData};
 mod warpify_footer;
 
@@ -145,6 +147,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::Goose
+        | CLIAgent::Hermes
         | CLIAgent::Vibe
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
@@ -251,10 +254,13 @@ impl TerminalView {
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
                     *scrollback_type == SharedSessionScrollbackType::None;
+                let source = SharedSessionSource::user(
+                    self.active_conversation_task_id(ctx).map(|t| t.to_string()),
+                );
                 self.attempt_to_share_session(
                     *scrollback_type,
                     Some(SharedSessionActionSource::FooterChip),
-                    SessionSourceType::default(),
+                    source,
                     true,
                     ctx,
                 );
@@ -613,14 +619,16 @@ impl TerminalView {
     }
 
     /// Conditionally closes CLI agent rich input after a prompt submission.
-    /// When auto-toggle is active with a plugin listener, rich input stays
-    /// open (status-change events manage visibility instead).
-    /// Otherwise, respects the auto-dismiss-after-submit setting.
+    /// When auto-toggle is active with a plugin listener that emits rich
+    /// status, rich input stays open (status-change events manage visibility
+    /// instead). Otherwise, respects the auto-dismiss-after-submit setting.
     fn maybe_close_rich_input_after_submit(&mut self, ctx: &mut ViewContext<Self>) {
         let session = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id);
-        let has_plugin = session
-            .as_ref()
-            .is_some_and(|s| s.listener.is_some() && s.should_auto_toggle_input);
+        let has_plugin = session.as_ref().is_some_and(|s| {
+            s.listener.is_some()
+                && s.should_auto_toggle_input
+                && agent_supports_rich_status(&s.agent)
+        });
         let ai_settings = AISettings::as_ref(ctx);
 
         let should_close = if has_plugin && *ai_settings.auto_toggle_rich_input {
@@ -1212,8 +1220,6 @@ impl UseAgentToolbar {
             AgentInputFooterEvent::HideRichInput => {
                 ctx.emit(UseAgentToolbarEvent::HideRichInput);
             }
-            // The handoff pane is a non-CLI surface; `Input` handles this event.
-            AgentInputFooterEvent::OpenHandoffPane { .. } => {}
             // Non-CLI events are handled by Input's subscription, not here.
             _ => {}
         }
@@ -1529,5 +1535,5 @@ impl ActionButtonTheme for AgentFooterButtonTheme {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

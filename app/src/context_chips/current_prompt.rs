@@ -1,61 +1,50 @@
-use crate::features::FeatureFlag;
-use crate::report_if_error;
-use crate::settings::{InputSettings, WarpPromptSeparator};
-use crate::terminal::event::{BlockType, UserBlockCompleted};
-use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionsEvent};
-use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::{
-    debounce::debounce,
-    editor::EditorView,
-    menu::{MenuItem, MenuItemFields},
-    terminal::{
-        model::{
-            block::{Block, BlockMetadata},
-            session::Sessions,
-        },
-        session_settings::{
-            GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
-            ToolbarChipSelection,
-        },
-        view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction},
-    },
-};
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash as _, Hasher as _};
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
 use settings::Setting as _;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::user_preferences::GetUserPreferences;
-
-use super::ChipResult;
-use super::{
-    chips_to_string,
-    context_chip::{
-        ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
-        ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
-        RefreshConfig, ShellCommandGenerator,
-    },
-    logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger},
-    prompt::Prompt,
-    ChipValue, ContextChipKind,
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+#[cfg(feature = "local_fs")]
+use warpui::WeakModelHandle;
+use warpui::{
+    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
 };
+
+use super::context_chip::{
+    ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
+    ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
+    RefreshConfig, ShellCommandGenerator,
+};
+use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
+use super::prompt::Prompt;
+use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::context_chips::display_chip::GitLineChanges;
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash as _, Hasher as _};
-use std::sync::Arc;
-use std::time::Duration;
-#[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
-use warpui::{
-    r#async::{SpawnedFutureHandle, Timer},
-    AppContext, ViewHandle,
+use crate::debounce::debounce;
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::report_if_error;
+use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::terminal::event::{BlockType, UserBlockCompleted};
+use crate::terminal::model::block::{Block, BlockMetadata};
+use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::session_settings::{
+    GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
+    ToolbarChipSelection,
 };
-use warpui::{Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
+use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
 
 #[cfg(test)]
-#[path = "current_prompt_test.rs"]
+#[path = "current_prompt_tests.rs"]
 mod tests;
 
 const PROMPT_DEBOUNCE_PERIOD: Duration = Duration::from_millis(50);
@@ -518,9 +507,21 @@ impl CurrentPrompt {
             return false;
         };
 
+        // A retryable failure (`Error`, `TimedOut`) is not a usable cached
+        // result: `last_fingerprint` is recorded before the command runs, and
+        // such failures intentionally do not populate `last_failure_fingerprint`.
+        // Without this guard, the next periodic tick would treat the failed
+        // attempt as a cache hit and never retry. Deterministic failures
+        // continue to be suppressed via `last_failure_fingerprint`.
         let should_skip = self
             .states
             .get(chip_kind)
+            .filter(|state| {
+                !matches!(
+                    state.update_status,
+                    ChipUpdateStatus::Error | ChipUpdateStatus::TimedOut
+                )
+            })
             .and_then(|state| state.last_fingerprint.as_ref())
             .is_some_and(|existing| existing == &new_fingerprint);
 
@@ -619,26 +620,7 @@ impl CurrentPrompt {
         &self,
         values_opt: Option<Vec<String>>,
     ) -> Option<Vec<String>> {
-        values_opt.map(|values| {
-            let mut trimmed: Vec<String> = values
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // We want to sort the branches so the current branch is first (denoted by *).
-            // The rest of the branches maintain their relative order.
-            trimmed.sort_by(|a, b| {
-                let a_starts_with_star = a.starts_with('*');
-                let b_starts_with_star = b.starts_with('*');
-                b_starts_with_star.cmp(&a_starts_with_star)
-            });
-
-            trimmed
-                .into_iter()
-                .map(|s| s.trim_start_matches('*').trim().to_string())
-                .collect()
-        })
+        super::git_branch_on_click::filter_git_branch_on_click_values(values_opt)
     }
 
     /// Perform a single update of the given chip.
@@ -780,6 +762,16 @@ impl CurrentPrompt {
                             output: value.as_ref(),
                             timed_out,
                         });
+                        // GitDiffStats has two value sources that can race when entering a repo:
+                        // this shell fallback (`git diff --shortstat HEAD`, tracked changes only)
+                        // and a repo-status watcher that also counts untracked files. If the
+                        // watcher attached while this fallback was in flight, drop the fallback's
+                        // result
+                        if matches!(chip_kind, ContextChipKind::GitDiffStats)
+                            && me.is_updated_externally(&chip_kind)
+                        {
+                            return;
+                        }
 
                         if timed_out {
                             if suppress_on_failure
@@ -1001,7 +993,7 @@ impl CurrentPrompt {
                     chip_kind_clone
                 },
                 |me, chip_kind, ctx| {
-                    me.fetch_chip_value_at_interval(&chip_kind, None, None, false, ctx);
+                    me.fetch_chip_value_at_interval(&chip_kind, None, None, true, ctx);
                 },
             );
 
@@ -1436,6 +1428,16 @@ impl CurrentPrompt {
             if let Some(old_strong) = old_weak.upgrade(ctx) {
                 ctx.unsubscribe_from_model(&old_strong);
             }
+        }
+
+        // Repo detached, clear GitDiffStats.
+        if handle.is_none() {
+            if let Some(state) = self.states.get_mut(&ContextChipKind::GitDiffStats) {
+                state.clear_abort_handlers();
+                state.clear_cache();
+            }
+            let _ = self.update_tx.try_send(());
+            return;
         }
 
         if let Some(weak) = handle {
