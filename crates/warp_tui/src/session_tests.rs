@@ -9,11 +9,57 @@ use warpui_core::App;
 use warpui_core::runtime::TuiDriverStartupError;
 
 use super::{
-    TuiArgs, ensure_terminal_session, handle_tui_driver_startup_error, parse_resume_token,
+    TuiArgs, ensure_terminal_session, handle_tui_driver_startup_error, parse_local_agent_url,
+    parse_resume_token,
 };
 use crate::root_view::RootTuiView;
 use crate::session_registry::TuiSessions;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
+
+#[test]
+fn accepts_loopback_local_agent_origins() {
+    assert_eq!(
+        parse_local_agent_url("http://127.0.0.1:8080")
+            .unwrap()
+            .as_str(),
+        "http://127.0.0.1:8080/"
+    );
+    assert!(parse_local_agent_url("http://localhost:8082/").is_ok());
+    assert!(parse_local_agent_url("http://[::1]:8080/").is_ok());
+}
+
+#[test]
+fn rejects_non_loopback_or_decorated_local_agent_urls() {
+    assert!(parse_local_agent_url("http://example.com/").is_err());
+    assert!(parse_local_agent_url("https://localhost/").is_err());
+    assert!(parse_local_agent_url("http://user:secret@localhost/").is_err());
+    assert!(parse_local_agent_url("http://localhost/ai/multi-agent").is_err());
+    assert!(parse_local_agent_url("http://localhost/?query=1").is_err());
+    assert!(parse_local_agent_url("http://localhost/#fragment").is_err());
+    assert!(parse_local_agent_url("not a URL").is_err());
+}
+
+#[test]
+fn local_agent_flag_conflicts_with_warp_auth_and_cloud_resume() {
+    let error = TuiArgs::try_parse_from([
+        "warp",
+        "--local-agent-url",
+        "http://localhost:8080",
+        "--api-key",
+        "test",
+    ])
+    .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    let error = TuiArgs::try_parse_from([
+        "warp",
+        "--local-agent-url",
+        "http://localhost:8080",
+        "--resume",
+        "test",
+    ])
+    .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
 
 #[test]
 fn parses_provider_api_key_setup_flag() {

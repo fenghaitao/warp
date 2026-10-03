@@ -181,6 +181,12 @@ async fn convert_multi_agent_client_error(
     let error = match error {
         warp_multi_agent_client::Error::Authentication(error)
         | warp_multi_agent_client::Error::AmbientHeaders(error) => AIApiError::Other(error),
+        warp_multi_agent_client::Error::UnsupportedLocalRequest => AIApiError::Other(
+            anyhow::anyhow!("Passive suggestions are unavailable in local-agent mode"),
+        ),
+        warp_multi_agent_client::Error::LocalAgentUrl(error) => {
+            AIApiError::Other(anyhow::Error::from(error))
+        }
         warp_multi_agent_client::Error::Base64Decode(error) => {
             AIApiError::Other(anyhow::Error::from(error))
         }

@@ -136,6 +136,7 @@ impl AuthSession {
                 }
             }
             Credentials::SessionCookie => Ok(AuthToken::NoAuth),
+            Credentials::LocalAgent => bail!("Warp service access is disabled in local-agent mode"),
             #[cfg(any(feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => Ok(AuthToken::NoAuth),
         }

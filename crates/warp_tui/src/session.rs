@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use inquire::{InquireError, Password, PasswordDisplayMode};
+use url::{Host, Url};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
@@ -65,6 +66,16 @@ struct TuiArgs {
     /// API key for non-interactive authentication.
     #[arg(long, env = "WARP_API_KEY")]
     api_key: Option<String>,
+
+    /// Use a loopback Warp-compatible server for login-free local agent inference.
+    #[arg(
+        long,
+        env = "WARP_LOCAL_AGENT_URL",
+        value_name = "URL",
+        value_parser = parse_local_agent_url,
+        conflicts_with_all = ["api_key", "resume"]
+    )]
+    local_agent_url: Option<Url>,
 
     /// Securely store a model-provider API key for Warp Agent CLI.
     #[arg(
@@ -129,6 +140,30 @@ fn read_provider_api_key() -> Result<Option<String>> {
     io::stdin().read_to_string(&mut value)?;
     let value = value.trim().to_owned();
     Ok((!value.is_empty()).then_some(value))
+}
+
+fn parse_local_agent_url(value: &str) -> Result<Url, String> {
+    let mut url = Url::parse(value).map_err(|_| "local agent URL must be a valid URL")?;
+    if url.scheme() != "http" {
+        return Err("local agent URL must use http".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("local agent URL must not contain credentials".to_owned());
+    }
+    let is_loopback = match url.host() {
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    };
+    if !is_loopback {
+        return Err("local agent URL must use a loopback host".to_owned());
+    }
+    if !matches!(url.path(), "" | "/") || url.query().is_some() || url.fragment().is_some() {
+        return Err("local agent URL must not contain a path, query, or fragment".to_owned());
+    }
+    url.set_path("/");
+    Ok(url)
 }
 
 /// Validates and wraps a server conversation token from the command line.
@@ -217,20 +252,24 @@ pub fn run() -> Result<()> {
     } else {
         AIConversationAutoexecuteMode::RespectUserSettings
     };
+    let local_agent_mode = args.local_agent_url.is_some();
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();
     let result = warp::run_tui(
         args.api_key,
+        args.local_agent_url,
         Box::new(move |ctx| {
             init(
                 resume_token,
                 default_autoexecute_mode,
                 exit_summary_for_app,
+                local_agent_mode,
                 ctx,
             )
         }),
     );
     if result.is_ok()
+        && !local_agent_mode
         && let Some(token) = exit_summary.token()
     {
         let token = token.as_str();
@@ -246,6 +285,7 @@ fn init(
     resume_token: Option<ServerConversationToken>,
     default_autoexecute_mode: AIConversationAutoexecuteMode,
     exit_summary: TuiExitSummaryHandle,
+    local_agent_mode: bool,
     ctx: &mut AppContext,
 ) {
     warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent::from_environment(), ctx);
@@ -256,7 +296,11 @@ fn init(
     // Kick off the background auto-updater (its polling loop only runs for
     // release builds installed via the managed versioned layout; see the
     // `autoupdate` module docs).
-    crate::autoupdate::TuiAutoupdater::register(ctx);
+    if local_agent_mode {
+        crate::autoupdate::TuiAutoupdater::register_disabled("local-agent mode", ctx);
+    } else {
+        crate::autoupdate::TuiAutoupdater::register(ctx);
+    }
     crate::zero_state_animation::ZeroStateAnimationConfig::register(ctx);
 
     // Honor an explicit TUI theme or match the host terminal automatically.

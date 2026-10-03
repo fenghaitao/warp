@@ -53,6 +53,39 @@ fn credentials_with_user_identity_start_logged_in() {
 }
 
 #[test]
+fn local_agent_identity_starts_on_usable_tui_phase() {
+    let state = AuthState::new_logged_out_for_test();
+    state.set_user(Some(crate::auth::user::User::local_agent()));
+    state.set_credentials(Some(Credentials::LocalAgent));
+
+    assert!(matches!(
+        initial_login_phase(&state),
+        TuiLoginPhase::LoggedIn
+    ));
+    assert!(state.is_local_agent());
+    assert!(matches!(
+        state.persist_action(),
+        crate::auth::auth_state::PersistAction::DoNothing
+    ));
+}
+
+#[test]
+fn local_tui_logout_preserves_ephemeral_identity() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.read(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(Credentials::LocalAgent))
+        });
+
+        app.update(super::log_out_tui);
+
+        app.read(|ctx| assert!(AuthStateProvider::as_ref(ctx).get().is_local_agent()));
+    });
+}
+
+#[test]
 fn missing_credentials_and_identity_start_signed_out() {
     let auth_state = AuthState::new_logged_out_for_test();
 

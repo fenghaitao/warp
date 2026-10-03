@@ -225,6 +225,11 @@ impl Client {
         self.builder(self.wrapped.post(url), include_warp_headers, iap_token)
     }
 
+    /// Creates a POST request without Warp-specific or IAP headers.
+    pub fn post_without_warp_headers<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
+        self.builder(self.wrapped.post(url), false, None)
+    }
+
     pub fn put<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
         let iap_token = self.iap_token_for(url.clone());

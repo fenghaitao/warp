@@ -18,7 +18,15 @@ prost.workspace = true
 reqwest-eventsource.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-futures.workspace = true
+tracing-futures = { workspace = true, features = ["futures-03"] }
+url.workspace = true
 warp_core.workspace = true
 warp_multi_agent_api.workspace = true
 warp_server_client.workspace = true
+
+[dev-dependencies]
+async-channel.workspace = true
+http_client = { workspace = true, features = ["test-util"] }
+libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
+mockito.workspace = true
+warp_server_auth = { workspace = true, features = ["test-util"] }

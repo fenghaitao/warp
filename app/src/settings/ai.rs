@@ -2330,7 +2330,9 @@ impl AISettings {
     }
 
     pub fn is_prompt_suggestions_enabled(&self, app: &warpui::AppContext) -> bool {
-        self.is_active_ai_enabled(app) && *self.prompt_suggestions_enabled_internal
+        !AuthStateProvider::as_ref(app).get().is_local_agent()
+            && self.is_active_ai_enabled(app)
+            && *self.prompt_suggestions_enabled_internal
     }
 
     pub fn is_rule_suggestions_enabled(&self, app: &warpui::AppContext) -> bool {
@@ -2338,7 +2340,9 @@ impl AISettings {
     }
 
     pub fn is_code_suggestions_enabled(&self, app: &warpui::AppContext) -> bool {
-        self.is_active_ai_enabled(app) && *self.code_suggestions_enabled_internal
+        !AuthStateProvider::as_ref(app).get().is_local_agent()
+            && self.is_active_ai_enabled(app)
+            && *self.code_suggestions_enabled_internal
     }
 
     pub fn is_natural_language_autosuggestions_enabled(&self, app: &warpui::AppContext) -> bool {

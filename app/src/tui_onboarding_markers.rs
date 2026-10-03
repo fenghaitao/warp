@@ -106,6 +106,20 @@ impl TuiOnboardingMarkers {
         }
     }
 
+    /// Creates an immediately ready, non-persisting marker model for login-free local mode.
+    pub fn new_local() -> Self {
+        Self {
+            state: TuiOnboardingMarkersState::Ready {
+                first_zero_state_available: false,
+                first_credit_gate_available: false,
+            },
+            load_generation: 0,
+            persist_markers: false,
+            onboarding_client: None,
+            load_timeout: MARKER_LOAD_TIMEOUT,
+        }
+    }
+
     #[cfg(test)]
     fn new_loading_for_test(
         onboarding_client: Arc<dyn TuiOnboardingClient>,

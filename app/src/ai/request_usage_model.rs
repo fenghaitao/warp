@@ -285,6 +285,10 @@ impl AIRequestUsageModel {
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<Option<usize>> {
         let (sender, receiver) = oneshot::channel();
+        if AuthStateProvider::as_ref(ctx).get().is_local_agent() {
+            let _ = sender.send(None);
+            return receiver;
+        }
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             let _ = sender.send(None);
             return receiver;
@@ -364,6 +368,9 @@ impl AIRequestUsageModel {
     }
 
     pub fn request_availability_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        if AuthStateProvider::as_ref(ctx).get().is_local_agent() {
+            return;
+        }
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
         }
@@ -499,6 +506,9 @@ impl AIRequestUsageModel {
     /// Returns `true` if the user can start an interactive AI request.
     /// Prefers the server decision when present; otherwise uses the pre-fetch fallback.
     pub fn has_any_ai_remaining<S: TeamScope + ?Sized>(&self, scope: &S, ctx: &AppContext) -> bool {
+        if AuthStateProvider::as_ref(ctx).get().is_local_agent() {
+            return true;
+        }
         if let Some(availability) = self.server_availability.latest {
             return Self::server_availability_permits_ai(availability, scope, ctx);
         }

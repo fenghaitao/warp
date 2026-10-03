@@ -1343,6 +1343,7 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
                     entrypoint: TuiEntryPoint::Interactive {
                         mount: Box::new(|_| {}),
                         api_key: None,
+                        local_agent_url: None,
                     },
                 },
                 ctx,

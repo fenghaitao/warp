@@ -485,6 +485,16 @@ impl TuiAutoupdater {
         });
     }
 
+    /// Registers the singleton without starting update checks.
+    pub(crate) fn register_disabled(reason: &'static str, ctx: &mut AppContext) {
+        ctx.add_singleton_model(move |_| TuiAutoupdater {
+            eligibility: AutoupdateEligibility::Disabled { reason },
+            status: TuiAutoupdateStatus::Idle,
+            last_reported_outcome: None,
+        });
+        log::info!("TUI autoupdate disabled: {reason}");
+    }
+
     /// The user-visible status of the update loop, for the zero state.
     pub(crate) fn status(&self) -> TuiAutoupdateStatus {
         self.status

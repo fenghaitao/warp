@@ -432,6 +432,8 @@ enum TuiEntryPoint {
         mount: TuiMountFn,
         /// API key for non-interactive Warp authentication.
         api_key: Option<String>,
+        /// Loopback server used for login-free local agent inference.
+        local_agent_url: Option<Url>,
     },
     /// Execute a CLI command after TUI-scoped app initialization, then exit.
     CliCommand {
@@ -442,6 +444,7 @@ enum TuiEntryPoint {
 enum AuthInitialization {
     Persisted,
     PendingApiKey(String),
+    LocalAgent,
 }
 
 impl LaunchMode {
@@ -472,10 +475,37 @@ impl LaunchMode {
         }
     }
 
+    fn local_agent_url(&self) -> Option<&Url> {
+        match self {
+            LaunchMode::Tui {
+                entrypoint:
+                    TuiEntryPoint::Interactive {
+                        local_agent_url, ..
+                    },
+            } => local_agent_url.as_ref(),
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => None,
+        }
+    }
+
+    fn uses_local_agent(&self) -> bool {
+        self.local_agent_url().is_some()
+    }
+
     fn auth_initialization(&self) -> AuthInitialization {
-        match self.api_key() {
-            Some(api_key) => AuthInitialization::PendingApiKey(api_key),
-            None => AuthInitialization::Persisted,
+        if self.uses_local_agent() {
+            AuthInitialization::LocalAgent
+        } else {
+            match self.api_key() {
+                Some(api_key) => AuthInitialization::PendingApiKey(api_key),
+                None => AuthInitialization::Persisted,
+            }
         }
     }
 
@@ -937,9 +967,17 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// view plus the window/driver bootstrap), so `warp` never has to depend on
 /// `warp_tui`.
 #[cfg(feature = "tui")]
-pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
+pub fn run_tui(
+    api_key: Option<String>,
+    local_agent_url: Option<Url>,
+    mount: TuiMountFn,
+) -> Result<()> {
     run_internal(LaunchMode::Tui {
-        entrypoint: TuiEntryPoint::Interactive { mount, api_key },
+        entrypoint: TuiEntryPoint::Interactive {
+            mount,
+            api_key,
+            local_agent_url,
+        },
     })
 }
 
@@ -1357,7 +1395,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         match launch_mode {
             #[cfg(feature = "tui")]
             LaunchMode::Tui { entrypoint } => match entrypoint {
-                TuiEntryPoint::Interactive { mount, .. } => crate::tui::init(mount, ctx),
+                TuiEntryPoint::Interactive {
+                    mount,
+                    local_agent_url,
+                    ..
+                } => crate::tui::init(mount, local_agent_url.is_some(), ctx),
                 TuiEntryPoint::CliCommand { execute } => execute(ctx),
             },
             #[cfg(not(feature = "tui"))]
@@ -1518,6 +1560,7 @@ pub(crate) fn initialize_app(
             AuthState::initialize_for_credential_validation(ctx),
             Some(api_key),
         ),
+        AuthInitialization::LocalAgent => (AuthState::initialize_for_local_agent(ctx), None),
     };
     let auth_state = Arc::new(auth_state);
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
@@ -1533,14 +1576,19 @@ pub(crate) fn initialize_app(
     // is handed to both `ServerApi` (for sync reads on the request path) and
     // `IapManager` (which owns refresh logic on the main thread).
     #[cfg(not(target_family = "wasm"))]
-    let iap_state = ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)));
+    let iap_state = if launch_mode.uses_local_agent() {
+        None
+    } else {
+        ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)))
+    };
     #[cfg(target_family = "wasm")]
     let iap_state: Option<Arc<IapState>> = None;
 
     let server_api_provider = ctx.add_singleton_model({
         let auth_state = auth_state.clone();
         let iap_state = iap_state.clone();
-        move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, ctx)
+        let local_agent_url = launch_mode.local_agent_url().cloned();
+        move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, local_agent_url, ctx)
     });
 
     let server_api = server_api_provider.as_ref(ctx).get();
@@ -1809,7 +1857,7 @@ pub(crate) fn initialize_app(
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "crash_reporting")] {
-            let is_crash_reporting_enabled = crash_reporting::init(ctx);
+            let is_crash_reporting_enabled = !launch_mode.uses_local_agent() && crash_reporting::init(ctx);
         } else {
             let is_crash_reporting_enabled = false;
         }
@@ -1928,8 +1976,9 @@ pub(crate) fn initialize_app(
     });
 
     let user_is_logged_in = auth_state.is_logged_in();
+    let user_is_cloud_logged_in = user_is_logged_in && !launch_mode.uses_local_agent();
 
-    if user_is_logged_in {
+    if user_is_cloud_logged_in {
         // Set the first frame callback to record the app's startup time.
         // This is only sent for logged-in users so that new users don't skew performance metrics.
         let is_screen_reader_enabled = ctx.is_screen_reader_enabled();
@@ -1969,7 +2018,7 @@ pub(crate) fn initialize_app(
                 crash_recovery.on_frame_drawn(window_id, ctx);
             });
         })
-    } else {
+    } else if !launch_mode.uses_local_agent() {
         // If the app was opened while logged out, record an event for measuring new users.
         // This is sent immediately in case they quit the app on the signup screen.
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LoggedOutStartup, ctx);
@@ -2071,7 +2120,9 @@ pub(crate) fn initialize_app(
     let server_api_clone = server_api.clone();
     ctx.add_singleton_model(|ctx| {
         let telemetry_collector = TelemetryCollector::new(server_api_clone);
-        telemetry_collector.initialize_telemetry_collection(ctx);
+        if !launch_mode.uses_local_agent() {
+            telemetry_collector.initialize_telemetry_collection(ctx);
+        }
         telemetry_collector
     });
     timer.mark_interval_end("INITIALIZE_TELEMETRY_COLLECTION");
@@ -2449,7 +2500,9 @@ pub(crate) fn initialize_app(
     // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
     // which authenticates immediately and resolves IAP out of band (see
     // `startup_auth_is_non_blocking`).
-    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. })
+        || launch_mode.uses_local_agent()
+    {
         None
     } else {
         pending_api_key

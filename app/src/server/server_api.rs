@@ -449,8 +449,21 @@ impl ServerApi {
         event_sender: async_channel::Sender<AuthEvent>,
         agent_source: Option<ai::AgentSource>,
         iap_state: Option<Arc<IapState>>,
+        local_agent_url: Option<Url>,
         ctx: &mut ModelContext<ServerApiProvider>,
     ) -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        let mut client = if local_agent_url.is_some() {
+            http_client::Client::from_client_builder(
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none()),
+            )
+            .expect("local-agent HTTP client should be constructible")
+        } else {
+            http_client::Client::new()
+        };
+        #[cfg(target_family = "wasm")]
         let mut client = http_client::Client::new();
         let iap_token_provider = iap_state.map(|state| {
             client.set_iap_token_provider(state.clone());
@@ -469,6 +482,7 @@ impl ServerApi {
             agent_source,
             iap_token_provider,
             telemetry_api,
+            local_agent_url,
         )
     }
 
@@ -479,6 +493,7 @@ impl ServerApi {
         agent_source: Option<ai::AgentSource>,
         iap_token_provider: Option<Arc<dyn http_client::iap::IapTokenProvider>>,
         telemetry_api: TelemetryApi,
+        local_agent_url: Option<Url>,
     ) -> Self {
         let graphql_routing = GraphqlRoutingConfig {
             #[cfg(feature = "agent_mode_evals")]
@@ -487,15 +502,18 @@ impl ServerApi {
             path_prefix: None,
         };
         let authenticated_graphql = AuthenticatedGraphqlConfig::default();
-        let base_client = Arc::new(BaseClient::new(
-            client,
-            auth_state,
-            event_sender,
-            agent_source.map(|source| source.as_str().to_string()),
-            graphql_routing,
-            authenticated_graphql,
-            iap_token_provider,
-        ));
+        let base_client = Arc::new(
+            BaseClient::new(
+                client,
+                auth_state,
+                event_sender,
+                agent_source.map(|source| source.as_str().to_string()),
+                graphql_routing,
+                authenticated_graphql,
+                iap_token_provider,
+            )
+            .with_local_agent_url(local_agent_url),
+        );
 
         Self {
             base_client,
@@ -510,7 +528,15 @@ impl ServerApi {
         let auth_state = Arc::new(AuthState::new_for_test());
         let client = Arc::new(http_client::Client::new_for_test());
 
-        Self::new_with_parts(client, auth_state, tx, None, None, TelemetryApi::new())
+        Self::new_with_parts(
+            client,
+            auth_state,
+            tx,
+            None,
+            None,
+            TelemetryApi::new(),
+            None,
+        )
     }
 
     #[cfg(all(test, feature = "skip_login"))]
@@ -529,6 +555,7 @@ impl ServerApi {
             None,
             None,
             TelemetryApi::new(),
+            None,
         )
     }
 
@@ -1472,6 +1499,7 @@ impl ServerApiProvider {
         auth_state: Arc<AuthState>,
         agent_source: Option<ai::AgentSource>,
         iap_state: Option<Arc<IapState>>,
+        local_agent_url: Option<Url>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (event_sender, event_receiver) = async_channel::bounded(10);
@@ -1481,6 +1509,7 @@ impl ServerApiProvider {
             event_sender,
             agent_source,
             iap_state,
+            local_agent_url,
             ctx,
         );
 

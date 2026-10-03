@@ -14,6 +14,12 @@ pub enum Error {
     #[error("Failed to resolve ambient headers for multi-agent request")]
     AmbientHeaders(#[source] anyhow::Error),
 
+    #[error("Passive suggestions are unavailable in local-agent mode")]
+    UnsupportedLocalRequest,
+
+    #[error("Failed to construct local-agent endpoint URL")]
+    LocalAgentUrl(#[source] url::ParseError),
+
     #[error("Failed to decode base64 multi-agent response event")]
     Base64Decode(#[source] base64::DecodeError),
 
@@ -50,32 +56,38 @@ pub async fn generate_multi_agent_output(
     request: &warp_multi_agent_api::Request,
     team_uid: Option<String>,
 ) -> Result<OutputStream, Error> {
-    let auth_token = client
-        .get_or_refresh_access_token()
-        .await
-        .map_err(Error::Authentication)?;
     let is_passive = is_passive_suggestion_request(request);
-    let url = endpoint_url(is_passive);
-
-    let mut request_builder = client
-        .http_client()
-        .post(url)
+    let is_local = client.local_agent_url().is_some();
+    let mut request_builder = if let Some(local_agent_url) = client.local_agent_url() {
+        if is_passive {
+            return Err(Error::UnsupportedLocalRequest);
+        }
+        let url = local_agent_endpoint_url(local_agent_url)?;
+        client.http_client().post_without_warp_headers(url)
+    } else {
+        let auth_token = client
+            .get_or_refresh_access_token()
+            .await
+            .map_err(Error::Authentication)?;
+        let mut request_builder = client.http_client().post(hosted_endpoint_url(is_passive));
+        if let Some(token) = auth_token.as_bearer_token() {
+            request_builder = request_builder.bearer_auth(token);
+        }
+        for (name, value) in client
+            .ambient_headers(ambient_policy(is_passive))
+            .await
+            .map_err(Error::AmbientHeaders)?
+        {
+            request_builder = request_builder.header(name, value);
+        }
+        if let Some(team_uid) = team_uid {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
+        }
+        request_builder
+    };
+    request_builder = request_builder
         .proto(request)
         .prevent_sleep("Agent Mode request in-progress");
-    if let Some(token) = auth_token.as_bearer_token() {
-        request_builder = request_builder.bearer_auth(token);
-    }
-
-    for (name, value) in client
-        .ambient_headers(ambient_policy(is_passive))
-        .await
-        .map_err(Error::AmbientHeaders)?
-    {
-        request_builder = request_builder.header(name, value);
-    }
-    if let Some(team_uid) = team_uid {
-        request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
-    }
 
     let raw_stream = client.wrap_eventsource_with_iap_detection(request_builder.eventsource());
     let output_stream = raw_stream.filter_map(|event| async {
@@ -108,7 +120,7 @@ pub async fn generate_multi_agent_output(
     // Wrap the output stream with a trace span.
     let output_stream = output_stream.instrument(tracing::info_span!(
         "generate_multi_agent_output",
-        tags.cloud_agent = true,
+        tags.cloud_agent = !is_local,
         conversation_id = tracing::field::Empty,
         request_id = tracing::field::Empty,
         run_id = tracing::field::Empty,
@@ -132,7 +144,7 @@ fn is_passive_suggestion_request(request: &warp_multi_agent_api::Request) -> boo
     })
 }
 
-fn endpoint_url(is_passive: bool) -> String {
+fn hosted_endpoint_url(is_passive: bool) -> String {
     format!(
         "{}/{}/{}",
         ChannelState::server_root_url(),
@@ -147,6 +159,10 @@ fn endpoint_url(is_passive: bool) -> String {
             "multi-agent"
         }
     )
+}
+
+fn local_agent_endpoint_url(root: &url::Url) -> Result<url::Url, Error> {
+    root.join("ai/multi-agent").map_err(Error::LocalAgentUrl)
 }
 
 fn ambient_policy(is_passive: bool) -> AmbientHeaderPolicy {

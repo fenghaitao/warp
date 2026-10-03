@@ -99,6 +99,10 @@ impl TelemetryCollector {
     /// * Write events to disk, for sending on the next app startup
     /// * Synchronously send events to rudderstack
     pub fn flush_telemetry_events_for_shutdown(&self, ctx: &mut ModelContext<TelemetryCollector>) {
+        if AuthStateProvider::as_ref(ctx).get().is_local_agent() {
+            clear_event_queue();
+            return;
+        }
         let execution_mode = AppExecutionMode::as_ref(ctx);
 
         if execution_mode.send_telemetry_at_shutdown() {

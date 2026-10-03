@@ -64,6 +64,7 @@ tempfile.workspace = true
 websocket.workspace = true
 
 [dev-dependencies]
+libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 mockall.workspace = true
 mockito.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }

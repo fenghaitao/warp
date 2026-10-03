@@ -189,6 +189,27 @@ impl User {
         }
     }
 
+    /// Identity used by the login-free local-agent TUI. It is never persisted or authenticated
+    /// against Warp services.
+    pub fn local_agent() -> Self {
+        Self {
+            local_id: UserUid::new("local-agent"),
+            metadata: UserMetadata {
+                email: String::new(),
+                display_name: Some("Local agent".to_owned()),
+                photo_url: None,
+            },
+            is_onboarded: true,
+            needs_sso_link: false,
+            anonymous_user_type: None,
+            is_on_work_domain: false,
+            linked_at: None,
+            personal_object_limits: None,
+            principal_type: PrincipalType::User,
+            global_skills: Vec::new(),
+        }
+    }
+
     pub fn is_user_anonymous(&self) -> bool {
         self.anonymous_user_type().is_some() && self.linked_at().is_none()
     }

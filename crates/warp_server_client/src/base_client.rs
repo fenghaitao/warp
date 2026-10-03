@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use instant::Duration;
 use parking_lot::{Mutex, RwLock};
+use url::Url;
 use warp_graphql::client::RequestOptions;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::AuthToken;
@@ -128,6 +129,7 @@ pub struct BaseClient {
     graphql_routing: GraphqlRoutingConfig,
     authenticated_graphql: AuthenticatedGraphqlConfig,
     iap_token_provider: Option<Arc<dyn http_client::iap::IapTokenProvider>>,
+    local_agent_url: Option<Url>,
 }
 
 impl BaseClient {
@@ -184,7 +186,19 @@ impl BaseClient {
             graphql_routing,
             authenticated_graphql,
             iap_token_provider,
+            local_agent_url: None,
         }
+    }
+
+    /// Selects a local inference server without changing hosted service routing.
+    pub fn with_local_agent_url(mut self, url: Option<Url>) -> Self {
+        self.local_agent_url = url;
+        self
+    }
+
+    /// Returns the configured local-agent server root, when this client is in local mode.
+    pub fn local_agent_url(&self) -> Option<&Url> {
+        self.local_agent_url.as_ref()
     }
 
     /// Returns whether authenticated GraphQL decoration would override BaseClient-owned headers.

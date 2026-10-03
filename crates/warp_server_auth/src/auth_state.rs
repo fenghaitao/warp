@@ -186,6 +186,14 @@ impl AuthState {
         state
     }
 
+    /// Creates the non-persisted identity used by an explicitly configured local-agent TUI.
+    pub fn initialize_for_local_agent(ctx: &AppContext) -> Self {
+        let state = Self::new(ctx);
+        state.set_user(Some(User::local_agent()));
+        state.set_credentials(Some(Credentials::LocalAgent));
+        state
+    }
+
     fn should_use_test_user() -> bool {
         cfg!(any(test, feature = "skip_login", feature = "test-util"))
             || ChannelState::channel() == Channel::Integration
@@ -223,6 +231,7 @@ impl AuthState {
             (Some(_), Some(Credentials::ApiKey { .. })) => PersistAction::DoNothing,
             (Some(_), Some(Credentials::Bearer(_))) => PersistAction::DoNothing,
             (Some(_), Some(Credentials::SessionCookie)) => PersistAction::DoNothing,
+            (Some(_), Some(Credentials::LocalAgent)) => PersistAction::DoNothing,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             (Some(_), Some(Credentials::Test)) => PersistAction::DoNothing,
             // Credentials without a user, or user without credentials - transient states
@@ -341,6 +350,11 @@ impl AuthState {
                 "Tried to update Firebase tokens without Firebase credentials"
             ));
         }
+    }
+
+    /// Returns whether credentials represent the non-persisted local-agent identity.
+    pub fn is_local_agent(&self) -> bool {
+        matches!(self.credentials(), Some(Credentials::LocalAgent))
     }
 
     /// Determines whether the user should be considered as logged in.

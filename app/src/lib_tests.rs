@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn local_tui_uses_ephemeral_auth_initialization() {
+    let mode = LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+            local_agent_url: Some(Url::parse("http://127.0.0.1:8080/").unwrap()),
+        },
+    };
+    assert!(matches!(
+        mode.auth_initialization(),
+        AuthInitialization::LocalAgent
+    ));
+}
+
+#[test]
 fn app_api_key_requires_validation() {
     let app = LaunchMode::App {
         args: Default::default(),
@@ -19,6 +34,7 @@ fn tui_api_key_requires_validation() {
         entrypoint: TuiEntryPoint::Interactive {
             mount: Box::new(|_| {}),
             api_key: Some("tui-api-key".to_owned()),
+            local_agent_url: None,
         },
     };
 
@@ -66,6 +82,7 @@ fn tui_uses_distinct_secure_storage_service_name() {
         entrypoint: TuiEntryPoint::Interactive {
             mount: Box::new(|_| {}),
             api_key: None,
+            local_agent_url: None,
         },
     };
     assert!(matches!(
@@ -102,6 +119,7 @@ fn startup_auth_is_non_blocking_only_for_tui() {
         entrypoint: TuiEntryPoint::Interactive {
             mount: Box::new(|_| {}),
             api_key: None,
+            local_agent_url: None,
         },
     };
     assert!(startup_auth_is_non_blocking(&tui));
@@ -142,6 +160,7 @@ fn launch_modes_select_expected_logging_frontend() {
         entrypoint: TuiEntryPoint::Interactive {
             mount: Box::new(|_| {}),
             api_key: None,
+            local_agent_url: None,
         },
     };
     let app = LaunchMode::App {

@@ -171,6 +171,7 @@ fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
                     entrypoint: TuiEntryPoint::Interactive {
                         mount: Box::new(|_| {}),
                         api_key: None,
+                        local_agent_url: None,
                     },
                 },
                 ctx,
@@ -208,6 +209,7 @@ fn tui_default_denylist_overrides_agent_decides_command_execution() {
                     entrypoint: TuiEntryPoint::Interactive {
                         mount: Box::new(|_| {}),
                         api_key: None,
+                        local_agent_url: None,
                     },
                 },
                 ctx,
@@ -280,6 +282,7 @@ fn tui_explicit_collection_preserves_execute_commands() {
                     entrypoint: TuiEntryPoint::Interactive {
                         mount: Box::new(|_| {}),
                         api_key: None,
+                        local_agent_url: None,
                     },
                 },
                 ctx,
@@ -1309,6 +1312,7 @@ fn profile_sources_preserve_state_across_migration_and_rollout() {
                         entrypoint: TuiEntryPoint::Interactive {
                             mount: Box::new(|_| {}),
                             api_key: None,
+                            local_agent_url: None,
                         },
                     },
                     ctx,

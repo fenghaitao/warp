@@ -1681,3 +1681,27 @@ fn test_availability_refresh_skipped_when_logged_out() {
         });
     });
 }
+
+#[test]
+fn local_agent_ignores_cached_cloud_credit_denial() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.read(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(crate::auth::credentials::Credentials::LocalAgent))
+        });
+        let model = add_request_usage_model_with_client(&mut app, Arc::new(MockAIClient::new()));
+
+        model.update(&mut app, |model, ctx| {
+            model.server_availability.latest = Some(AICreditAvailability::unavailable(
+                AICreditDenialReason::Delinquent,
+            ));
+            model.request_availability_refresh(ctx);
+            assert!(!model.server_availability.refresh_in_flight);
+            assert!(model.has_any_ai_remaining(&TeamlessScopeForTest, ctx));
+        });
+        let receiver = model.update(&mut app, |model, ctx| model.refresh_request_usage(ctx));
+        assert_eq!(receiver.await.unwrap(), None);
+    });
+}

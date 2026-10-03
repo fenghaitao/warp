@@ -206,7 +206,7 @@ impl SingletonEntity for TuiLoginModel {}
 ///
 /// Registers the [`TuiLoginModel`], mounts the TUI immediately, and shows an
 /// explicit welcome screen when the user isn't already logged in.
-pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
+pub(crate) fn init(mount: TuiMountFn, local_agent_mode: bool, ctx: &mut AppContext) {
     let initial_phase = initial_login_phase(AuthStateProvider::as_ref(ctx).get());
     let logged_in = matches!(&initial_phase, TuiLoginPhase::LoggedIn);
     ctx.add_singleton_model(move |_| TuiLoginModel {
@@ -216,14 +216,18 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     });
     ctx.add_singleton_model(TuiMcpManager::new);
     ctx.add_singleton_model(TuiUserInfoManager::new);
-    let onboarding_markers = ctx.add_singleton_model(TuiOnboardingMarkers::new);
+    let onboarding_markers = if local_agent_mode {
+        ctx.add_singleton_model(|_| TuiOnboardingMarkers::new_local())
+    } else {
+        ctx.add_singleton_model(TuiOnboardingMarkers::new)
+    };
 
     // Keep the auth subscription alive for the full process lifetime so a
     // logged-in TUI can complete device authorization again after logout.
     ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
         handle_auth_manager_event(event, ctx);
     });
-    if logged_in {
+    if logged_in && !local_agent_mode {
         onboarding_markers.update(ctx, |markers, ctx| {
             markers.load_current_account(ctx);
         });
@@ -388,6 +392,9 @@ fn start_tui_device_login_with_entrypoint(
 }
 /// Logs out the current TUI user and sends them to Warp web's logged-out flow.
 pub fn log_out_tui(ctx: &mut AppContext) {
+    if AuthStateProvider::as_ref(ctx).get().is_local_agent() {
+        return;
+    }
     auth::log_out(ctx);
     TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
         markers.reset_for_account_transition(ctx);

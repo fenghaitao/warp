@@ -168,6 +168,7 @@ pub struct PrivacySettings {
 /// A snapshot of a user's [`PrivacySettings`] settings at some point in time.
 #[derive(Clone, Copy)]
 pub struct PrivacySettingsSnapshot {
+    local_agent_mode: bool,
     is_telemetry_enabled: bool,
     is_crash_reporting_enabled: bool,
     is_telemetry_force_enabled: bool,
@@ -196,6 +197,9 @@ impl PrivacySettingsSnapshot {
     }
 
     pub fn should_disable_telemetry(&self) -> bool {
+        if self.local_agent_mode {
+            return true;
+        }
         // If a user has opted in to the agent mode analytics experiment, telemetry must be enabled.
         !self.is_telemetry_enabled
             && !self.is_telemetry_force_enabled
@@ -209,6 +213,7 @@ impl PrivacySettingsSnapshot {
     #[cfg(test)]
     pub fn mock() -> Self {
         Self {
+            local_agent_mode: false,
             cloud_conversation_storage_enabled: None,
             is_telemetry_enabled: true,
             is_crash_reporting_enabled: true,
@@ -473,7 +478,18 @@ impl PrivacySettings {
     /// The returned snapshot is not stateful, thus its values should be used shortly after the
     /// snapshot is returned.
     pub fn get_snapshot(&self, app: &AppContext) -> PrivacySettingsSnapshot {
+        if self.auth_state.is_local_agent() {
+            return PrivacySettingsSnapshot {
+                local_agent_mode: true,
+                cloud_conversation_storage_enabled: Some(false),
+                is_telemetry_enabled: false,
+                is_crash_reporting_enabled: false,
+                is_telemetry_force_enabled: false,
+                should_collect_ai_ugc_telemetry: false,
+            };
+        }
         PrivacySettingsSnapshot {
+            local_agent_mode: false,
             cloud_conversation_storage_enabled: (!self.is_cloud_conversation_storage_enabled)
                 .then_some(false),
             is_telemetry_enabled: self.is_telemetry_enabled,

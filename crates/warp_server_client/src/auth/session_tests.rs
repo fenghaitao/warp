@@ -28,6 +28,22 @@ fn device_authorization_uses_warp_agent_cli_client() {
 }
 
 #[test]
+fn local_credentials_deny_warp_service_auth_without_refresh_events() {
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(Credentials::LocalAgent));
+    let (session, events) = session_with_state(auth_state);
+
+    assert!(!session.allowed_to_refresh_token());
+    assert!(
+        block_on(session.get_or_refresh_access_token())
+            .unwrap_err()
+            .to_string()
+            .contains("disabled in local-agent mode")
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
 fn bearer_credentials_are_returned_without_session_refresh_events() {
     let auth_state = Arc::new(AuthState::new_logged_out_for_test());
     auth_state.set_credentials(Some(Credentials::Bearer("daemon-token".to_string())));
